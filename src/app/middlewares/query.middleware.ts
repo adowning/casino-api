@@ -1,19 +1,18 @@
-import { NextFunction, Response } from 'express';
+import { Context, Next } from 'hono';
 
-export const settingsMiddleware = async (
-  req: any,
-  res: Response,
-  next: NextFunction,
-) => {
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 10);
+export const queryMiddleware = async (c: Context, next: Next) => {
+  const pageParam = c.req.query('page');
+  const limitParam = c.req.query('limit');
+
+  const page = Number(pageParam || 1);
+  const limit = Number(limitParam || 10);
   const offset = (page - 1) * limit;
 
-  req.pagination = {
+  c.set('pagination', {
     page,
     limit,
     offset,
-  };
+  });
 
-  next();
+  await next();
 };

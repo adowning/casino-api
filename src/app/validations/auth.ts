@@ -1,119 +1,105 @@
-import { Request, Response, NextFunction } from 'express';
+import { Context, Next } from 'hono';
 import joi from 'joi';
 
 export default class AuthValidate {
-  static async login(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
+  static async login(c: Context, next: Next) {
     const schema = joi.object().keys({
       email: joi.string().required().email(),
       password: joi.string().required(),
     });
-    const { error } = schema.validate(req.body);
+    // Using c.req.json() as per instruction, assuming Content-Type: application/json
+    // If x-www-form-urlencoded is also possible, c.req.parseBody() would be more robust.
+    const body = await c.req.json();
+    const { error } = schema.validate(body);
     if (error) {
-      return res.status(400).json({
+      return c.json({
         message: error.details[0].message.replace(/"/g, ''),
-      });
+      }, 400);
     }
-    return next();
+    await next();
   }
 
-  static async signup(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
+  static async signup(c: Context, next: Next) {
     const schema = joi.object().keys({
       firstName: joi.string().required(),
-      lastName: joi.string(),
-      phoneNumber: joi.string(),
+      lastName: joi.string().allow('').optional(), // Made optional and allow empty string
+      phoneNumber: joi.string().allow('').optional(), // Made optional and allow empty string
       email: joi.string().required().email(),
       password: joi.string().required(),
-      referralCode: joi.string().min(6).max(6),
+      referralCode: joi.string().min(6).max(6).optional(), // Made optional
     });
-    const { error } = schema.validate(req.body);
+    const body = await c.req.json();
+    const { error } = schema.validate(body);
     if (error) {
-      return res.status(400).json({
+      return c.json({
         message: error.details[0].message.replace(/"/g, ''),
-      });
+      }, 400);
     }
-    return next();
+    await next();
   }
 
-  static async update(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
+  static async update(c: Context, next: Next) {
     const schema = joi.object().keys({
-      firstName: joi.string(),
-      lastName: joi.string(),
-      email: joi.string().email(),
-      password: joi.string(),
-      role: joi.valid('user', 'admin', 'manager'),
-      verified: joi.boolean(),
-      phoneNumber: joi.string(),
+      firstName: joi.string().optional(),
+      lastName: joi.string().optional(),
+      email: joi.string().email().optional(),
+      password: joi.string().optional(),
+      role: joi.valid('user', 'admin', 'manager').optional(),
+      verified: joi.boolean().optional(),
+      phoneNumber: joi.string().optional(),
     });
-    const { error } = schema.validate(req.body);
+    const body = await c.req.json();
+    const { error } = schema.validate(body);
     if (error) {
-      return res.status(400).json({
+      return c.json({
         message: error.details[0].message.replace(/"/g, ''),
-      });
+      }, 400);
     }
-    return next();
+    await next();
   }
 
-  static async resetPassword(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
+  static async resetPassword(c: Context, next: Next) {
     const schema = joi.object().keys({
       password: joi.string().min(8).required(),
       token: joi.string().required(),
     });
-    const { error } = schema.validate(req.body);
+    const body = await c.req.json();
+    const { error } = schema.validate(body);
     if (error) {
-      return res.status(400).json({
+      return c.json({
         message: error.details[0].message.replace(/"/g, ''),
-      });
+      }, 400);
     }
-    return next();
+    await next();
   }
 
-  static async forgetPassword(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
+  static async forgetPassword(c: Context, next: Next) {
     const schema = joi.object().keys({
-      email: joi.string().email().allow(''),
+      // Assuming email is optional or can be empty as per .allow('')
+      email: joi.string().email().allow('').optional(),
     });
-    const { error } = schema.validate(req.body);
+    const body = await c.req.json();
+    const { error } = schema.validate(body);
     if (error) {
-      return res.status(400).json({
+      return c.json({
         message: error.details[0].message.replace(/"/g, ''),
-      });
+      }, 400);
     }
-    return next();
+    await next();
   }
 
-  static async verify(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
+  static async verify(c: Context, next: Next) {
     const schema = joi.object().keys({
-      token: joi.string().allow(''),
+      // Assuming token is optional or can be empty as per .allow('')
+      token: joi.string().allow('').optional(),
     });
-    const { error } = schema.validate(req.body);
+    const body = await c.req.json();
+    const { error } = schema.validate(body);
     if (error) {
-      return res.status(400).json({
+      return c.json({
         message: error.details[0].message.replace(/"/g, ''),
-      });
+      }, 400);
     }
-    return next();
+    await next();
   }
 }

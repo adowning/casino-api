@@ -1,21 +1,20 @@
-import { NextFunction, Response, Request } from 'express';
-import Game from '../models/Game';
+import { Context, Next } from 'hono';
+import Game from '../models/Game'; // Assuming Game model is Mongoose or similar
 
-export const playGameMiddleware = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) => {
-  const { gameId } = req.params;
+export const playGameMiddleware = async (c: Context, next: Next) => {
+  const gameId = c.req.param('gameId');
 
   try {
     const game = await Game.findById(gameId);
     if (!game) {
-      res.redirect('/404');
+      // In Hono, redirect is a Response object
+      return c.redirect('/404');
     } else {
-      next();
+      await next();
     }
   } catch (error) {
-    res.redirect('/400');
+    // Log the error for debugging
+    console.error("Error in playGameMiddleware:", error);
+    return c.redirect('/400');
   }
 };

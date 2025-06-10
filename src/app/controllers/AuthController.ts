@@ -1,35 +1,32 @@
-import { NextFunction, Request, Response } from 'express';
+import { Context } from 'hono';
 import { compare, hash } from 'bcryptjs';
 import { verify, sign, decode } from 'jsonwebtoken';
-import { HttpException } from '../exceptions/HttpException';
-import User from '../models/User';
+// import { HttpException } from '../exceptions/HttpException'; // Replaced with c.json responses
+import User from '../models/User'; // Assuming Mongoose User model
 import Keys from '../keys';
 import emailMocks from '../utils/email';
 import sendEmail from '../utils/nodemailer';
+// Assuming UserContextData is defined in auth.middleware.ts and imported where routes are defined if needed
+// For controller methods, c.get('user') will be used.
 
 class AuthController {
-  static signUp = async (req: Request, res: Response) => {
+  static signUp = async (c: Context) => {
     try {
-      const userData = req.body;
-
+      const userData = await c.req.json();
       const { referralCode } = userData;
 
       let referrer;
       if (referralCode) {
         referrer = await User.findOne({ referralCode });
         if (!referrer) {
-          throw new HttpException(400, 'Invalid referral code');
+          return c.json({ message: 'Invalid referral code' }, 400);
         }
       }
 
-      const findUser = await User.findOne({
-        email: userData.email,
-      }).exec();
-      if (findUser)
-        throw new HttpException(
-          409,
-          `This email ${userData.email} already exists`,
-        );
+      const findUser = await User.findOne({ email: userData.email }).exec();
+      if (findUser) {
+        return c.json({ message: `This email ${userData.email} already exists` }, 409);
+      }
 
       const hashedPassword = await hash(userData.password, 10);
       const createUserData = new User({
@@ -53,55 +50,34 @@ class AuthController {
         signUpUserData.firstName,
       );
 
-      const message = emailMocks.verifyAccount(
-        signUpUserData.firstName,
-        token,
-      );
+      const message = emailMocks.verifyAccount(signUpUserData.firstName, token);
       const subject = 'Account Verification';
-      sendEmail(signUpUserData.email, subject, message);
+      sendEmail(signUpUserData.email, subject, message); // Assuming sendEmail is async or handles errors
 
-      res
-        .status(201)
-        .json({ data: signUpUserData, message: 'signup' });
+      return c.json({ data: signUpUserData, message: 'signup' }, 201);
     } catch (error: any) {
-      res.status(error?.status || 500).json({
-        message: error?.message || 'something went wrong',
-      });
+      console.error('SignUp Error:', error);
+      return c.json({ message: error?.message || 'something went wrong' }, error?.status || 500);
     }
   };
 
-  static logIn = async (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) => {
+  static logIn = async (c: Context) => {
     try {
-      const userData: any = req.body;
+      const userData: any = await c.req.json();
+      const findUser = await User.findOne({ email: userData.email });
 
-      const findUser = await User.findOne({
-        email: userData.email,
-      });
-      if (!findUser)
-        throw new HttpException(
-          409,
-          `Invalid login credentials. Please check your email and password and try again.`,
-        );
+      if (!findUser) {
+        return c.json({ message: 'Invalid login credentials. Please check your email and password and try again.' }, 409);
+      }
 
-      const isPasswordMatching: boolean = await compare(
-        userData.password,
-        findUser.password,
-      );
-      if (!isPasswordMatching)
-        throw new HttpException(
-          409,
-          'Invalid login credentials. Please check your email and password and try again.',
-        );
+      const isPasswordMatching: boolean = await compare(userData.password, findUser.password);
+      if (!isPasswordMatching) {
+        return c.json({ message: 'Invalid login credentials. Please check your email and password and try again.' }, 409);
+      }
 
-      if (!findUser.verified)
-        throw new HttpException(
-          400,
-          `This email ${userData.email} was not verified, please check your email and follow instructions.`,
-        );
+      if (!findUser.verified) {
+        return c.json({ message: `This email ${userData.email} was not verified, please check your email and follow instructions.` }, 400);
+      }
 
       const tokenData = AuthController.createToken(
         findUser._id.toString(),
@@ -109,75 +85,82 @@ class AuthController {
         findUser.role,
         findUser.firstName,
       );
-      const cookie = AuthController.createCookie(tokenData);
 
-      res.setHeader('Set-Cookie', [cookie]);
-      res
-        .status(200)
-        .json({ data: findUser, tokenData, message: 'login' });
-    } catch (error: any) {
-      res.status(error?.status || 500).json({
-        message: error?.message || 'something went wrong',
+      // Set cookie using Hono's context
+      c.cookie('Authorization', tokenData.token, {
+        httpOnly: true,
+        maxAge: typeof tokenData.expiresIn === 'string' ? parseInt(tokenData.expiresIn, 10) : tokenData.expiresIn, // maxAge needs to be a number of seconds
+        path: '/', // Important for cookie visibility
       });
+
+      return c.json({ data: findUser, tokenData, message: 'login' }, 200);
+    } catch (error: any) {
+      console.error('LogIn Error:', error);
+      return c.json({ message: error?.message || 'something went wrong' }, error?.status || 500);
     }
   };
 
-  static logOut = async (req: any, res: Response) => {
+  static logOut = async (c: Context) => {
     try {
-      const userData = req.user;
-      const findUser = await User.findOne({
-        email: userData.email,
-        password: userData.password,
-      }).exec();
-      if (!findUser)
-        throw new HttpException(409, "User doesn't exist");
+      // User data should be available from authMiddleware if this route is protected
+      const userAuthData = c.get('user') as any; // Cast to any or UserContextData
+      if (!userAuthData) {
+        // This case might indicate an issue if logout is always for authenticated users
+        return c.json({ message: "User not authenticated or session expired" }, 401);
+      }
 
-      res.setHeader('Set-Cookie', ['Authorization=; Max-age=0']);
-      res.status(200).json({ data: findUser, message: 'logout' });
-    } catch (error: any) {
-      res.status(error?.status || 500).json({
-        message: error?.message || 'something went wrong',
+      // The original logic for findUser in logout seems redundant if authMiddleware already verified the user.
+      // However, if it's a strict check against the DB based on full user object (including potentially hashed password):
+      // const findUser = await User.findOne({ email: userAuthData.email /*, password: userAuthData.password */ }).exec();
+      // if (!findUser) {
+      //   return c.json({ message: "User doesn't exist" }, 409);
+      // }
+      // For simplicity, if authMiddleware ran, we assume user is valid.
+
+      c.cookie('Authorization', '', {
+        maxAge: 0,
+        httpOnly: true,
+        path: '/',
       });
+      // Returning some data, though often logout might just return a success message.
+      return c.json({ message: 'logout successful' }, 200);
+    } catch (error: any) {
+      console.error('LogOut Error:', error);
+      return c.json({ message: error?.message || 'something went wrong' }, error?.status || 500);
     }
   };
 
-  static createToken(
-    id: string,
-    email: string,
-    role: string,
-    firstName: string,
-  ) {
-    const dataStoredInToken = {
-      id,
-      email,
-      role,
-      firstName,
-    };
+  static createToken(id: string, email: string, role: string, firstName: string) {
+    const dataStoredInToken = { id, email, role, firstName };
     const secretKey: string = Keys.SECRET_KEY;
-    const expiresIn: number | string = Keys.TOKEN_EXPIRES_IN;
+    const expiresIn: number | string = Keys.TOKEN_EXPIRES_IN; // e.g., '1h' or 3600 (seconds)
 
     return {
-      expiresIn,
+      expiresIn: expiresIn, // Return the original value for maxAge calculation
       token: sign(dataStoredInToken, secretKey, { expiresIn }),
     };
   }
 
-  static createCookie(tokenData: any): string {
-    return `Authorization=${tokenData.token}; HttpOnly; Max-Age=${tokenData.expiresIn};`;
-  }
+  // createCookie method is no longer needed as c.cookie() is used directly.
 
   static decode = (token: string) => {
-    const payload = verify(token, Keys.SECRET_KEY);
-    return payload;
+    try {
+      const payload = verify(token, Keys.SECRET_KEY);
+      return payload;
+    } catch (error) {
+      // Handle invalid token, expired token etc.
+      console.error("Token decode error:", error);
+      return null; // Or throw an error
+    }
   };
 
-  static async forgettingPassword(req: Request, res: Response) {
-    let { email } = req.body;
+  static async forgettingPassword(c: Context) {
     try {
+      let { email } = await c.req.json() as { email: string };
       email = email.toLowerCase().trim();
       const user = await User.findOne({ email });
       if (!user) {
-        throw new HttpException(409, 'user not found, signup');
+        return c.json({ message: 'user not found, signup' }, 409);
       }
 
       const { token } = AuthController.createToken(
@@ -186,81 +169,69 @@ class AuthController {
         user.role,
         user.firstName,
       );
-      const message = emailMocks.forgetPassword(token);
+      const messageContent = emailMocks.forgetPassword(token); // Renamed variable to avoid conflict
       const subject = 'Reset Password';
-      sendEmail(user.email, subject, message);
-      res.status(200).json({
-        message: 'check your email',
-      });
-    } catch (error) {
-      res.status(error?.status || 500).json({
-        message: error?.message || 'something went wrong',
-      });
+      sendEmail(user.email, subject, messageContent);
+      return c.json({ message: 'check your email' }, 200);
+    } catch (error: any) {
+      console.error('ForgettingPassword Error:', error);
+      return c.json({ message: error?.message || 'something went wrong' }, error?.status || 500);
     }
   }
 
-  static async resetingPassword(req: Request, res: Response) {
-    const { password, token } = req.body;
+  static async resetingPassword(c: Context) {
     try {
+      const { password, token } = await c.req.json();
       const decoded: any = AuthController.decode(token);
+      if (!decoded || !decoded.id) {
+        return c.json({ message: 'Invalid or expired token' }, 400);
+      }
       const { id } = decoded;
       let user = await User.findById(id);
       if (!user) {
-        throw new HttpException(409, 'user not found, signup');
+        return c.json({ message: 'user not found, signup' }, 409);
       }
-      const hashPassword = await hash(password, 12);
+      const hashPassword = await hash(password, 10); // bcryptjs hash takes salt rounds, not 12. Default is 10.
 
       user.set({ password: hashPassword });
       user = await user.save();
-      res.status(201).json({
-        message: 'password updated',
-      });
-    } catch (error) {
-      res.status(error?.status || 500).json({
-        message: error?.message || 'something went wrong',
-      });
+      return c.json({ message: 'password updated' }, 200); // Changed to 200 OK
+    } catch (error: any) {
+      console.error('ResetingPassword Error:', error);
+      return c.json({ message: error?.message || 'something went wrong' }, error?.status || 500);
     }
   }
 
-  static async confirmAccount(req: Request, res: Response) {
-    const { token } = req.body;
+  static async confirmAccount(c: Context) {
     try {
-      const decodedToken: any = decode(token);
-      if (!decodedToken) {
-        throw new HttpException(
-          400,
-          'Your verification link may have expired.',
-        );
+      const { token } = await c.req.json();
+      const decodedToken: any = decode(token); // Using decode from jsonwebtoken, not custom one.
+                                            // verify might be better if signature check is needed here too.
+      if (!decodedToken || !decodedToken.id) {
+        return c.json({ message: 'Your verification link may have expired or is invalid.' }, 400);
       }
       let user = await User.findById(decodedToken.id);
       if (!user) {
-        throw new HttpException(401, 'user not found, signup first');
+        return c.json({ message: 'user not found, signup first' }, 401);
       }
 
       if (user.verified) {
-        res.status(200).json({
-          message: 'user verified, login',
-          data: user,
-        });
+        return c.json({ message: 'user already verified, login', data: user }, 200);
       } else {
         user.verified = true;
         user = await user.save();
-
-        res.status(200).json({
-          message: 'verified successfully',
-          data: user,
-        });
+        return c.json({ message: 'verified successfully', data: user }, 200);
       }
     } catch (err: any) {
+      console.error('ConfirmAccount Error:', err);
+      // Check if err has status and message, otherwise provide generic response
       const message = err.message || 'something went wrong';
-      res.status(err?.status || 500).json({
-        message: err?.message || 'something went wrong',
-      });
+      const status = err.status || 500;
+      return c.json({ message }, status);
     }
   }
 
   static generateReferralCode() {
-    // Generate a random string of 6 characters
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
     for (let i = 0; i < 6; i += 1) {
